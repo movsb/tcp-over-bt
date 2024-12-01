@@ -36,16 +36,18 @@ var (
 func splitWrite(w io.Writer, p []byte) (int, error) {
 	// Anybody knows the max packet size of bluetooth?
 	// Without a limit, there will be an error.
+	//
+	// GetMTU()?
 	const maxPacketSize = 64
 
 	count := 0
 	for len(p) > 0 {
 		n, err := w.Write(p[:Min(maxPacketSize, len(p))])
+		count += n
 		if err != nil {
 			return count, err
 		}
 		p = p[n:]
-		count += n
 	}
 	return count, nil
 }

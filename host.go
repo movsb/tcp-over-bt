@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	"tinygo.org/x/bluetooth"
 )
@@ -40,24 +41,37 @@ func NewHost() *Host {
 	return h
 }
 
-// abe46b44-7f25-a25f-c915-b7b4839d39e7
+func (h *Host) Scan(timeout time.Duration) (name string, address string, found bool) {
+	now := time.Now()
+	if err := h.adapter.Scan(func(a *bluetooth.Adapter, sr bluetooth.ScanResult) {
+		if time.Since(now) > timeout {
+			h.adapter.StopScan()
+		}
+
+		if !sr.HasServiceUUID(uuidService) {
+			return
+		}
+
+		name = sr.LocalName()
+		address = sr.Address.String()
+		found = true
+
+		h.adapter.StopScan()
+	}); err != nil {
+		log.Println(err)
+		return
+	}
+
+	return
+}
+
 func (h *Host) Connect(address string) {
 	addr := bluetooth.Address{}
 	addr.Set(address)
-	device, err := h.adapter.Connect(addr, bluetooth.ConnectionParams{})
-	if err != nil {
-		log.Fatalln(err)
-	}
-	h.device = device
-	services, err := device.DiscoverServices([]bluetooth.UUID{uuidService})
-	if err != nil {
-		log.Fatalln(err)
-	}
+	h.device = Must1(h.adapter.Connect(addr, bluetooth.ConnectionParams{}))
+	services := Must1(h.device.DiscoverServices([]bluetooth.UUID{uuidService}))
 	h.svc = services[0]
-	chs, err := h.svc.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx})
-	if err != nil {
-		log.Fatalln(err)
-	}
+	chs := Must1(h.svc.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx}))
 	h.tx, h.rx = chs[0], chs[1]
 	Must(h.tx.EnableNotifications(func(buf []byte) {
 		h.mu.Lock()
@@ -68,6 +82,9 @@ func (h *Host) Connect(address string) {
 		default:
 		}
 	}))
+
+	// Send greeting, because ConnectHandler on Linux does not work.
+	h.Write([]byte(`Greeting from Host`))
 }
 
 func (h *Host) Read(p []byte) (int, error) {
@@ -88,11 +105,19 @@ func (h *Host) Write(p []byte) (int, error) {
 
 func main() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
+
 	h := NewHost()
-	h.Connect(`abe46b44-7f25-a25f-c915-b7b4839d39e7`)
+	name, address, found := h.Scan(time.Minute)
+	if !found {
+		log.Fatalln(`Device cannot be found`)
+	}
+	log.Println(`Connecting to `, name, address)
+	h.Connect(address)
+	log.Println(`Connected`)
+
 	go func() {
-		defer log.Println(`exited`)
 		Must1(io.Copy(os.Stdout, h))
 	}()
+
 	Must1(io.Copy(h, os.Stdin))
 }
