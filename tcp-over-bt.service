@@ -1,0 +1,11 @@
+[Unit]
+Description=tcp-over-bt
+Requires=sshd.service
+After=sshd.service
+
+[Service]
+ExecStart=/usr/local/bin/tcp-over-bt
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
