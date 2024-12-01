@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 
 	"tinygo.org/x/bluetooth"
 )
@@ -18,15 +19,16 @@ type Host struct {
 	svc    bluetooth.DeviceService
 	rx, tx bluetooth.DeviceCharacteristic
 
+	mu      sync.Mutex
 	txBuf   *bytes.Buffer
-	txBufCh chan []byte
+	txBufCh chan struct{}
 }
 
 func NewHost() *Host {
 	h := &Host{
 		adapter: bluetooth.DefaultAdapter,
 		txBuf:   bytes.NewBuffer(nil),
-		txBufCh: make(chan []byte),
+		txBufCh: make(chan struct{}),
 	}
 
 	h.adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
@@ -58,16 +60,25 @@ func (h *Host) Connect(address string) {
 	}
 	h.tx, h.rx = chs[0], chs[1]
 	Must(h.tx.EnableNotifications(func(buf []byte) {
-		h.txBufCh <- buf
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.txBuf.Write(buf)
+		select {
+		case h.txBufCh <- struct{}{}:
+		default:
+		}
 	}))
 }
 
 func (h *Host) Read(p []byte) (int, error) {
+	h.mu.Lock()
 	if h.txBuf.Len() <= 0 {
-		next := <-h.txBufCh
-		h.txBuf.Write(next)
+		h.mu.Unlock()
+		<-h.txBufCh
+		h.mu.Lock()
 	}
 	n, err := h.txBuf.Read(p)
+	h.mu.Unlock()
 	// log.Println(`Read:`, p[:n], err)
 	return n, err
 }

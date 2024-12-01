@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"tinygo.org/x/bluetooth"
@@ -15,8 +16,10 @@ import (
 type Device struct {
 	adapter *bluetooth.Adapter
 	rx, tx  *bluetooth.Characteristic
-	chR     chan []byte
+
+	mu      sync.Mutex
 	rxBuf   *bytes.Buffer
+	rxBufCh chan struct{}
 }
 
 func NewDevice() *Device {
@@ -24,8 +27,8 @@ func NewDevice() *Device {
 		adapter: bluetooth.DefaultAdapter,
 		rx:      &bluetooth.Characteristic{},
 		tx:      &bluetooth.Characteristic{},
-		chR:     make(chan []byte),
 		rxBuf:   bytes.NewBuffer(nil),
+		rxBufCh: make(chan struct{}),
 	}
 
 	Must(d.adapter.Enable())
@@ -38,7 +41,13 @@ func NewDevice() *Device {
 				UUID:   uuidRx,
 				Flags:  bluetooth.CharacteristicWritePermission | bluetooth.CharacteristicWriteWithoutResponsePermission,
 				WriteEvent: func(client bluetooth.Connection, offset int, value []byte) {
-					d.chR <- value
+					d.mu.Lock()
+					defer d.mu.Unlock()
+					d.rxBuf.Write(value)
+					select {
+					case d.rxBufCh <- struct{}{}:
+					default:
+					}
 				},
 			},
 			{
@@ -72,7 +81,7 @@ func (d *Device) Write(p []byte) (int, error) {
 	for len(p) > 0 {
 		n, err := d.tx.Write(p[:Min(64, len(p))])
 		if err != nil {
-			return 0, err
+			return count, err
 		}
 		p = p[n:]
 		count += n
@@ -81,11 +90,14 @@ func (d *Device) Write(p []byte) (int, error) {
 }
 
 func (d *Device) Read(p []byte) (int, error) {
+	d.mu.Lock()
 	if d.rxBuf.Len() <= 0 {
-		next := <-d.chR
-		d.rxBuf.Write(next)
+		d.mu.Unlock()
+		<-d.rxBufCh
+		d.mu.Lock()
 	}
 	n, err := d.rxBuf.Read(p)
+	d.mu.Unlock()
 	// log.Println(`Read:`, p[:n], err)
 	return n, err
 }
