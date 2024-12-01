@@ -107,7 +107,7 @@ func main() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
 
 	h := NewHost()
-	name, address, found := h.Scan(time.Minute)
+	name, address, found := h.Scan(time.Minute * 3)
 	if !found {
 		log.Fatalln(`Device cannot be found`)
 	}
