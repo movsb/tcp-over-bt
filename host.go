@@ -79,22 +79,11 @@ func (h *Host) Read(p []byte) (int, error) {
 	}
 	n, err := h.txBuf.Read(p)
 	h.mu.Unlock()
-	// log.Println(`Read:`, p[:n], err)
 	return n, err
 }
 
 func (h *Host) Write(p []byte) (int, error) {
-	// log.Println(`Write:`, len(p))
-	count := 0
-	for len(p) > 0 {
-		n, err := h.rx.Write(p[:Min(64, len(p))])
-		if err != nil {
-			return 0, err
-		}
-		p = p[n:]
-		count += n
-	}
-	return count, nil
+	return splitWrite(h.rx, p)
 }
 
 func main() {

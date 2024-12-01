@@ -76,17 +76,7 @@ func (d *Device) StartAdvertisement() {
 }
 
 func (d *Device) Write(p []byte) (int, error) {
-	// log.Println(`Write:`, len(p))
-	count := 0
-	for len(p) > 0 {
-		n, err := d.tx.Write(p[:Min(64, len(p))])
-		if err != nil {
-			return count, err
-		}
-		p = p[n:]
-		count += n
-	}
-	return count, nil
+	return splitWrite(d.tx, p)
 }
 
 func (d *Device) Read(p []byte) (int, error) {
@@ -98,7 +88,6 @@ func (d *Device) Read(p []byte) (int, error) {
 	}
 	n, err := d.rxBuf.Read(p)
 	d.mu.Unlock()
-	// log.Println(`Read:`, p[:n], err)
 	return n, err
 }
 
