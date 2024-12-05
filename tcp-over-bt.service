@@ -5,7 +5,7 @@ After=sshd.service
 
 [Service]
 ExecStart=/usr/local/bin/tcp-over-bt
-Restart=no
+Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target

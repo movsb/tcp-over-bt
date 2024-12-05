@@ -16,11 +16,19 @@ type Device struct {
 	adapter *bluetooth.Adapter
 	rx, tx  *bluetooth.Characteristic
 
+	// Currently, the SetConnectHandler on Linux does not work,
+	// Hence we do not know when our device is connected or disconnected.
+	// The control characteristic is sent from Host to let us know that
+	// a new connection is being made.
+	ctrl       *bluetooth.Characteristic
+	connection chan struct{}
+
+	// To close a connection, close this channel.
+	closed chan struct{}
+
 	mu      sync.Mutex
 	rxBuf   *bytes.Buffer
 	rxBufCh chan struct{}
-
-	firstMessage chan struct{}
 }
 
 func NewDevice() *Device {
@@ -28,10 +36,13 @@ func NewDevice() *Device {
 		adapter: bluetooth.DefaultAdapter,
 		rx:      &bluetooth.Characteristic{},
 		tx:      &bluetooth.Characteristic{},
+
+		ctrl:       &bluetooth.Characteristic{},
+		connection: make(chan struct{}),
+		closed:     make(chan struct{}),
+
 		rxBuf:   bytes.NewBuffer(nil),
 		rxBufCh: make(chan struct{}),
-
-		firstMessage: make(chan struct{}),
 	}
 
 	// TODO: not work
@@ -46,50 +57,68 @@ func NewDevice() *Device {
 		UUID: uuidService,
 		Characteristics: []bluetooth.CharacteristicConfig{
 			{
-				Handle: d.rx,
-				UUID:   uuidRx,
-				Flags:  bluetooth.CharacteristicWritePermission | bluetooth.CharacteristicWriteWithoutResponsePermission,
-				WriteEvent: func(client bluetooth.Connection, offset int, value []byte) {
-					if d.firstMessage != nil {
-						close(d.firstMessage)
-						d.firstMessage = nil
-						return
-					}
-					d.mu.Lock()
-					defer d.mu.Unlock()
-					d.rxBuf.Write(value)
-					select {
-					case d.rxBufCh <- struct{}{}:
-					default:
-					}
-				},
+				Handle:     d.rx,
+				UUID:       uuidRx,
+				Flags:      bluetooth.CharacteristicWritePermission | bluetooth.CharacteristicWriteWithoutResponsePermission,
+				WriteEvent: d.onRecv,
 			},
 			{
 				Handle: d.tx,
 				UUID:   uuidTx,
 				Flags:  bluetooth.CharacteristicNotifyPermission | bluetooth.CharacteristicReadPermission,
 			},
+			{
+				Handle:     d.ctrl,
+				UUID:       uuidCtrl,
+				Flags:      bluetooth.CharacteristicWritePermission | bluetooth.CharacteristicWriteWithoutResponsePermission,
+				WriteEvent: d.writeControl,
+			},
 		},
 	}
 
 	Must(d.adapter.AddService(&service))
 
+	a := d.adapter.DefaultAdvertisement()
+	Must(a.Configure(bluetooth.AdvertisementOptions{
+		ServiceUUIDs: []bluetooth.UUID{uuidService},
+	}))
+
 	return d
+}
+
+func (d *Device) writeControl(client bluetooth.Connection, offset int, p []byte) {
+	close(d.closed)
+
+	d.connection <- struct{}{}
+}
+
+func (d *Device) onRecv(client bluetooth.Connection, offset int, p []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.rxBuf.Write(p)
+	select {
+	case d.rxBufCh <- struct{}{}:
+	default:
+	}
 }
 
 func (d *Device) Address() string {
 	return Must1(d.adapter.Address()).String()
 }
 
+// 超时控制默认为“0”，即不超时，永远广播。
+// https://github.com/tinygo-org/bluetooth/blob/a668e1b0a062612faa41ac354f7edd5b25428101/gap_linux.go#L79-L84
 func (d *Device) StartAdvertisement() {
 	a := d.adapter.DefaultAdvertisement()
-	Must(a.Configure(bluetooth.AdvertisementOptions{
-		ServiceUUIDs: []bluetooth.UUID{uuidService},
-	}))
 	Must(a.Start())
 }
 
 func (d *Device) Write(p []byte) (int, error) {
+	select {
+	case <-d.closed:
+		return 0, errConnClosed
+	default:
+	}
 	return splitWrite(d.tx, p)
 }
 
@@ -97,18 +126,23 @@ func (d *Device) Read(p []byte) (int, error) {
 	d.mu.Lock()
 	if d.rxBuf.Len() <= 0 {
 		d.mu.Unlock()
-		<-d.rxBufCh
+		select {
+		case <-d.rxBufCh:
+		case <-d.closed:
+			return 0, errConnClosed
+		}
 		d.mu.Lock()
 	}
+
 	n, err := d.rxBuf.Read(p)
 	d.mu.Unlock()
 	return n, err
 }
 
-// Because the ConnectHandler on Linux does not work,
-// We treat first incoming message sent from Host as a greeting for Connect.
 func (d *Device) WaitForConnection() {
-	<-d.firstMessage
+	<-d.connection
+	d.closed = make(chan struct{})
+	d.rxBuf.Reset()
 }
 
 func main() {
@@ -116,18 +150,37 @@ func main() {
 
 	d := NewDevice()
 	log.Println(`Address:`, d.Address())
+
+	// 库代码硬编码成了无超时，所以只需要调用一次。
 	log.Println(`Start advertisement`)
 	d.StartAdvertisement()
 
-	log.Println(`Waiting for Connection`)
-	d.WaitForConnection()
-	log.Println(`Connected`)
+	for {
 
-	conn := Must1(net.Dial(`tcp4`, `localhost:22`))
+		log.Println(`Waiting for Connection`)
+		d.WaitForConnection()
+		log.Println(`Connected`)
 
-	go func() {
-		Must1(io.Copy(conn, d))
-	}()
+		conn := Must1(net.Dial(`tcp4`, `localhost:22`))
 
-	Must1(io.Copy(d, conn))
+		go func() {
+			<-d.closed
+			conn.Close()
+		}()
+
+		wg := sync.WaitGroup{}
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			io.Copy(conn, d)
+		}()
+
+		go func() {
+			defer wg.Done()
+			io.Copy(d, conn)
+		}()
+
+		wg.Wait()
+	}
 }

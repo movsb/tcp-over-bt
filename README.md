@@ -25,6 +25,11 @@ When you have network connection:
    	ProxyCommand tcp-over-bt
    ```
 
-3. `ssh zero` and wait, it will discover the first available device.
+3. `ssh zero` and wait patiently, it will discover the first available device.
 
-The device should be rebooted to be able to be connected.
+**Note:** Only one SSH connection is allowed at a time, which is a characteristic of Bluetooth connections.
+If you want multiple shells, use *tmux*.
+
+## Security
+
+There's no Bluetooth Paring. Anyone can connect to the same device. Authentication is done by SSH.

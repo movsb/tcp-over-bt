@@ -19,6 +19,7 @@ type Host struct {
 	device bluetooth.Device
 	svc    bluetooth.DeviceService
 	rx, tx bluetooth.DeviceCharacteristic
+	ctrl   bluetooth.DeviceCharacteristic
 
 	mu      sync.Mutex
 	txBuf   *bytes.Buffer
@@ -71,8 +72,8 @@ func (h *Host) Connect(address string) {
 	h.device = Must1(h.adapter.Connect(addr, bluetooth.ConnectionParams{}))
 	services := Must1(h.device.DiscoverServices([]bluetooth.UUID{uuidService}))
 	h.svc = services[0]
-	chs := Must1(h.svc.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx}))
-	h.tx, h.rx = chs[0], chs[1]
+	chs := Must1(h.svc.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx, uuidCtrl}))
+	h.tx, h.rx, h.ctrl = chs[0], chs[1], chs[2]
 	Must(h.tx.EnableNotifications(func(buf []byte) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -83,8 +84,7 @@ func (h *Host) Connect(address string) {
 		}
 	}))
 
-	// Send greeting, because ConnectHandler on Linux does not work.
-	h.Write([]byte(`Greeting from Host`))
+	h.ctrl.Write([]byte(`Greeting from Host`))
 }
 
 func (h *Host) Read(p []byte) (int, error) {
@@ -111,7 +111,7 @@ func main() {
 	if !found {
 		log.Fatalln(`Device cannot be found`)
 	}
-	log.Println(`Connecting to `, name, address)
+	log.Println(`Connecting to`, name, address)
 	h.Connect(address)
 	log.Println(`Connected`)
 
