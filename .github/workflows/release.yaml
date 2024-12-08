@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cross building
+        run: |
+          PREFIX=.build/tcp-over-bt
+
+          # args: OS ARCH HOST/DEVICE
+          _build() { GOOS=$1 GOARCH=$2 go build -o $PREFIX-$1-$2-$3; }
+
+          _build linux  arm64 device &
+          _build darwin arm64 host   &
+
+          wait
+      - name: Generate body
+        run: |
+          echo '**Build At**:
+          
+          * `'"$(date)"'`
+          * `'"$(TZ=Asia/Shanghai date)"'`
+          
+          **sha256sum**:
+
+          ```-
+          '"$(cd .build && shasum -a 256 *)"'
+          ```
+          ' > body.md
+      - name: Create Release
+        uses: ncipollo/release-action@v1.14.0
+        with:
+          allowUpdates: true
+          artifactErrorsFailBuild: true
+          replacesArtifacts: true
+          artifacts: .build/*
+          bodyFile: body.md
