@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"io"
 	"log"
 	"net"
 	"sync"
@@ -168,19 +167,6 @@ func main() {
 			conn.Close()
 		}()
 
-		wg := sync.WaitGroup{}
-		wg.Add(2)
-
-		go func() {
-			defer wg.Done()
-			io.Copy(conn, d)
-		}()
-
-		go func() {
-			defer wg.Done()
-			io.Copy(d, conn)
-		}()
-
-		wg.Wait()
+		Stream(conn, d)
 	}
 }

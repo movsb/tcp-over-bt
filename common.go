@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"sync"
 
 	"tinygo.org/x/bluetooth"
 )
@@ -58,3 +60,28 @@ func splitWrite(w io.Writer, p []byte) (int, error) {
 var (
 	errConnClosed = fmt.Errorf(`tcp-over-bt: connection closed`)
 )
+
+func Stream(a, b io.ReadWriter) {
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		io.Copy(a, b)
+	}()
+
+	go func() {
+		defer wg.Done()
+		io.Copy(b, a)
+	}()
+
+	wg.Wait()
+}
+
+var Stdio io.ReadWriter = struct {
+	io.Reader
+	io.Writer
+}{
+	os.Stdin,
+	os.Stdout,
+}

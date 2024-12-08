@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"sync"
@@ -125,9 +124,5 @@ func main() {
 	h.Connect(address)
 	fmt.Fprintln(os.Stderr, `Connected`)
 
-	go func() {
-		Must1(io.Copy(os.Stdout, h))
-	}()
-
-	Must1(io.Copy(h, os.Stdin))
+	Stream(h, Stdio)
 }
