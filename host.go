@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -34,7 +35,7 @@ func NewHost() *Host {
 	}
 
 	h.adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
-		log.Println(`Connect:`, device, connected)
+		// log.Println(`Connect:`, device, connected)
 	})
 
 	Must(h.adapter.Enable())
@@ -44,12 +45,19 @@ func NewHost() *Host {
 
 func (h *Host) Scan(timeout time.Duration) (name string, address string, found bool) {
 	now := time.Now()
+	uniqueAddresses := map[string]struct{}{}
+
 	if err := h.adapter.Scan(func(a *bluetooth.Adapter, sr bluetooth.ScanResult) {
 		if time.Since(now) > timeout {
 			h.adapter.StopScan()
 		}
 
 		if !sr.HasServiceUUID(uuidService) {
+			addr := sr.Address.String()
+			if _, ok := uniqueAddresses[addr]; !ok {
+				uniqueAddresses[addr] = struct{}{}
+				fmt.Fprintln(os.Stderr, `Ignoring`, addr, sr.LocalName())
+			}
 			return
 		}
 
@@ -107,13 +115,15 @@ func main() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
 
 	h := NewHost()
+	fmt.Fprintln(os.Stderr, `Scanning available devices...`)
 	name, address, found := h.Scan(time.Minute * 3)
 	if !found {
-		log.Fatalln(`Device cannot be found`)
+		fmt.Fprintln(os.Stderr, `Device cannot be found`)
+		os.Exit(1)
 	}
-	log.Println(`Connecting to`, name, address)
+	fmt.Fprintln(os.Stderr, `Connecting to`, address, name)
 	h.Connect(address)
-	log.Println(`Connected`)
+	fmt.Fprintln(os.Stderr, `Connected`)
 
 	go func() {
 		Must1(io.Copy(os.Stdout, h))
