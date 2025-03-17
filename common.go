@@ -5,20 +5,28 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"sync"
 
 	"tinygo.org/x/bluetooth"
 )
 
+func caller() (string, int) {
+	_, file, line, _ := runtime.Caller(2)
+	return file, line
+}
+
 func Must(err error) {
 	if err != nil {
-		log.Fatalln(err)
+		file, line := caller()
+		log.Fatalf(`%s:%d: %v`, file, line, err)
 	}
 }
 
 func Must1[T any](t T, err error) T {
 	if err != nil {
-		log.Fatalln(err)
+		file, line := caller()
+		log.Fatalf(`%s:%d: %v`, file, line, err)
 	}
 	return t
 }

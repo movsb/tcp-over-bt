@@ -2,7 +2,10 @@ module github.com/movsb/tcp-over-bt
 
 go 1.23.2
 
-require tinygo.org/x/bluetooth v0.10.0
+require (
+	github.com/spf13/pflag v1.0.6
+	tinygo.org/x/bluetooth v0.10.0
+)
 
 require (
 	github.com/go-ole/go-ole v1.2.6 // indirect

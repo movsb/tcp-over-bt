@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spf13/pflag"
 	"tinygo.org/x/bluetooth"
 )
 
@@ -113,13 +114,28 @@ func (h *Host) Write(p []byte) (int, error) {
 func main() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
 
+	var (
+		name    string
+		address string
+	)
+
+	pflag.StringVarP(&address, `address`, `a`, ``, `Address of the device`)
+	pflag.Parse()
+
 	h := NewHost()
-	fmt.Fprintln(os.Stderr, `Scanning available devices...`)
-	name, address, found := h.Scan(time.Minute * 3)
-	if !found {
-		fmt.Fprintln(os.Stderr, `Device cannot be found`)
-		os.Exit(1)
+
+	if !pflag.CommandLine.Changed(`address`) {
+		fmt.Fprintln(os.Stderr, `Scanning available devices...`)
+		var found bool
+		name, address, found = h.Scan(time.Minute * 3)
+		if !found {
+			fmt.Fprintln(os.Stderr, `Device cannot be found`)
+			os.Exit(1)
+		}
+	} else {
+		address = Must1(pflag.CommandLine.GetString(`address`))
 	}
+
 	fmt.Fprintln(os.Stderr, `Connecting to`, address, name)
 	h.Connect(address)
 	fmt.Fprintln(os.Stderr, `Connected`)
