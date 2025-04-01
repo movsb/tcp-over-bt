@@ -4,7 +4,7 @@ Make a TCP connection from Bluetooth.
 
 ## Use Case
 
-SSH into a headless Raspberry Pi (e.g.: Zero 2 W) which has a bad network configuration.
+SSH into a Linux machine, which is headless (e.g. Raspberry Pi Zero 2 W) or has a bad network configuration without using a Display Monitor.
 
 ## For Device
 

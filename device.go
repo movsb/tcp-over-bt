@@ -58,7 +58,7 @@ func NewDevice() *Device {
 			{
 				Handle:     d.rx,
 				UUID:       uuidRx,
-				Flags:      bluetooth.CharacteristicWritePermission | bluetooth.CharacteristicWriteWithoutResponsePermission,
+				Flags:      bluetooth.CharacteristicWritePermission,
 				WriteEvent: d.onRecv,
 			},
 			{
@@ -69,7 +69,7 @@ func NewDevice() *Device {
 			{
 				Handle:     d.ctrl,
 				UUID:       uuidCtrl,
-				Flags:      bluetooth.CharacteristicWritePermission | bluetooth.CharacteristicWriteWithoutResponsePermission,
+				Flags:      bluetooth.CharacteristicWritePermission,
 				WriteEvent: d.writeControl,
 			},
 		},
