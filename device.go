@@ -3,11 +3,11 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"io"
 	"log"
 	"net"
-	"sync"
+	"sync/atomic"
 
 	"tinygo.org/x/bluetooth"
 )
@@ -27,9 +27,7 @@ type Device struct {
 	// To close a connection, close this channel.
 	closed chan struct{}
 
-	mu      sync.Mutex
-	rxBuf   *bytes.Buffer
-	rxBufCh chan struct{}
+	seqRW atomic.Pointer[SequencedPacket]
 }
 
 func NewDevice() *Device {
@@ -41,9 +39,6 @@ func NewDevice() *Device {
 		ctrl:       &bluetooth.Characteristic{},
 		connection: make(chan struct{}),
 		closed:     make(chan struct{}),
-
-		rxBuf:   bytes.NewBuffer(nil),
-		rxBufCh: make(chan struct{}),
 	}
 
 	// TODO: not work
@@ -66,7 +61,7 @@ func NewDevice() *Device {
 			{
 				Handle: d.tx,
 				UUID:   uuidTx,
-				Flags:  bluetooth.CharacteristicNotifyPermission | bluetooth.CharacteristicReadPermission,
+				Flags:  bluetooth.CharacteristicNotifyPermission,
 			},
 			{
 				Handle:     d.ctrl,
@@ -94,12 +89,12 @@ func (d *Device) writeControl(client bluetooth.Connection, offset int, p []byte)
 }
 
 func (d *Device) onRecv(client bluetooth.Connection, offset int, p []byte) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.rxBuf.Write(p)
-	select {
-	case d.rxBufCh <- struct{}{}:
-	default:
+	if r := d.seqRW.Load(); r != nil {
+		if err := r.Receive(p); err != nil {
+			log.Fatalln(err)
+		}
+	} else {
+		log.Println(`packet dropped`)
 	}
 }
 
@@ -119,11 +114,22 @@ func (d *Device) Listen() {
 func (d *Device) Accept() Conn {
 	<-d.connection
 	d.closed = make(chan struct{})
-	d.rxBuf.Reset()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		<-d.closed
+		log.Println(`Connection closed, aborting any Read.`)
+		cancel()
+	}()
+
+	seq := NewSequencedPacket(ctx, d.tx)
+	d.seqRW.Store(seq)
 
 	conn := &DeviceConn{
 		d: d,
-		w: NewSegmentedWriter(d.tx, maxPacketSize),
+		r: seq,
+		w: NewSegmentedWriter(seq, maxPacketSize),
 	}
 
 	return conn
@@ -131,6 +137,7 @@ func (d *Device) Accept() Conn {
 
 type DeviceConn struct {
 	d *Device
+	r io.Reader
 	w io.Writer
 }
 
@@ -144,21 +151,7 @@ func (c *DeviceConn) Write(p []byte) (int, error) {
 }
 
 func (c *DeviceConn) Read(p []byte) (int, error) {
-	c.d.mu.Lock()
-
-	if c.d.rxBuf.Len() <= 0 {
-		c.d.mu.Unlock()
-		select {
-		case <-c.d.rxBufCh:
-		case <-c.d.closed:
-			return 0, errConnClosed
-		}
-		c.d.mu.Lock()
-	}
-
-	n, err := c.d.rxBuf.Read(p)
-	c.d.mu.Unlock()
-	return n, err
+	return c.r.Read(p)
 }
 
 func main() {

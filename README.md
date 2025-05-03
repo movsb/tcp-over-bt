@@ -33,3 +33,8 @@ If you want multiple shells, use *tmux*.
 ## Security
 
 There's no Bluetooth Paring. Anyone can connect to the same device. Authentication is done by SSH.
+
+## TODO
+
+- [ ] Flow Control: Sending is too fast, while Recv is too slow.
+- [ ] Allow more than one client.

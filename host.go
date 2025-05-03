@@ -3,12 +3,10 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -74,55 +72,22 @@ func (h *Host) Connect(address string) Conn {
 	chs := Must1(service.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx, uuidCtrl}))
 	tx, rx, ctrl := chs[0], chs[1], chs[2]
 
-	conn := &HostConn{
-		w: NewSegmentedWriter(rx, maxPacketSize),
+	seq := NewSequencedPacket(context.Background(), rx)
 
-		txBuf:   bytes.NewBuffer(nil),
-		txBufCh: make(chan struct{}),
+	conn := &ReadWriter{
+		Writer: NewSegmentedWriter(seq, maxPacketSize),
+		Reader: seq,
 	}
 
-	// Notification callback is called in a separate goroutine, so it may be in wrong order.
-	// https://github.com/tinygo-org/bluetooth/blob/b82048cd9da0fdabb6f2508f461c364184087b3a/gap_darwin.go#L223
 	Must(tx.EnableNotifications(func(buf []byte) {
-		conn.mu.Lock()
-		defer conn.mu.Unlock()
-		conn.txBuf.Write(buf)
-		select {
-		case conn.txBufCh <- struct{}{}:
-		default:
+		if err := seq.Receive(buf); err != nil {
+			log.Fatalln(err)
 		}
 	}))
 
 	Must1(ctrl.Write([]byte(`Greeting from Host`)))
 
 	return conn
-}
-
-type HostConn struct {
-	w io.Writer
-
-	mu      sync.RWMutex
-	txBuf   *bytes.Buffer
-	txBufCh chan struct{}
-}
-
-func (c *HostConn) Read(p []byte) (int, error) {
-	c.mu.RLock()
-	if c.txBuf.Len() <= 0 {
-		c.mu.RUnlock()
-		<-c.txBufCh
-		c.mu.RLock()
-	}
-	n, err := c.txBuf.Read(p)
-	c.mu.RUnlock()
-	if err == io.EOF {
-		err = nil
-	}
-	return n, err
-}
-
-func (c *HostConn) Write(p []byte) (int, error) {
-	return c.w.Write(p)
 }
 
 func main() {

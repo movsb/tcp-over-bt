@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -67,25 +69,124 @@ func (w *SegmentedWriter) Write(p []byte) (int, error) {
 	return count, nil
 }
 
+// Notification callback is called in a separate goroutine, so it may be in wrong order.
+// https://github.com/tinygo-org/bluetooth/blob/b82048cd9da0fdabb6f2508f461c364184087b3a/gap_darwin.go#L223
+//
+// Packets may be in wrong order, but they're not gonna be lost, since we're Write(WithResponse).
+// This is to fix the receive order.
+//
+// And, there's no need to implement an ARQ protocol. No packet lost, only unordered.
+type SequencedPacket struct {
+	ctx context.Context
+
+	sendSeq uint8
+	writer  io.Writer
+
+	recvSeq     uint8
+	recvBacklog map[uint8][]byte
+	recvBuf     *bytes.Buffer
+	recvReady   chan struct{}
+	lock        sync.Mutex
+}
+
+// When ctx Done, blocking Read is cancelled.
+func NewSequencedPacket(ctx context.Context, w io.Writer) *SequencedPacket {
+	return &SequencedPacket{
+		ctx: ctx,
+
+		sendSeq: 0,
+		writer:  w,
+
+		recvSeq:     0,
+		recvBacklog: map[uint8][]byte{},
+		recvBuf:     bytes.NewBuffer(nil),
+		recvReady:   make(chan struct{}),
+	}
+}
+
+func (sp *SequencedPacket) Receive(p []byte) error {
+	if len(p) < 2 {
+		return fmt.Errorf(`invalid packet received`)
+	}
+
+	sp.lock.Lock()
+	defer sp.lock.Unlock()
+
+	seq, data := p[0], p[1:]
+
+	if seq < sp.recvSeq {
+		return fmt.Errorf(`invalid packet received: seq too small`)
+	} else if seq > sp.recvSeq {
+		sp.recvBacklog[seq] = data
+		log.Println(`unordered packet received`, sp.recvSeq, seq)
+		return nil
+	}
+
+	sp.recvSeq++
+	sp.recvBuf.Write(data)
+
+	for {
+		saved, ok := sp.recvBacklog[sp.recvSeq]
+		if !ok {
+			break
+		}
+		sp.recvBuf.Write(saved)
+		delete(sp.recvBacklog, sp.recvSeq)
+		sp.recvSeq++
+	}
+
+	select {
+	case sp.recvReady <- struct{}{}:
+	default:
+	}
+
+	return nil
+}
+
+func (sp *SequencedPacket) Write(p []byte) (int, error) {
+	wrapped := append([]byte{sp.sendSeq}, p...)
+	sp.sendSeq++
+	n, err := sp.writer.Write(wrapped)
+	if err != nil {
+		return 0, err
+	}
+	return n - 1, nil
+}
+
+func (sp *SequencedPacket) Read(p []byte) (int, error) {
+	sp.lock.Lock()
+	if sp.recvBuf.Len() <= 0 {
+		sp.lock.Unlock()
+		select {
+		case <-sp.recvReady:
+			sp.lock.Lock()
+		case <-sp.ctx.Done():
+			return 0, sp.ctx.Err()
+		}
+	}
+	n, err := sp.recvBuf.Read(p)
+	sp.lock.Unlock()
+	return n, err
+}
+
 var (
 	errConnClosed = fmt.Errorf(`tcp-over-bt: connection closed`)
 )
 
 func Stream(a, b io.ReadWriter) {
-	wg := sync.WaitGroup{}
-	wg.Add(2)
+	exit := make(chan struct{}, 2)
 
 	go func() {
-		defer wg.Done()
 		io.Copy(a, b)
+		exit <- struct{}{}
 	}()
 
 	go func() {
-		defer wg.Done()
 		io.Copy(b, a)
+		exit <- struct{}{}
 	}()
 
-	wg.Wait()
+	<-exit
 }
 
 type Conn interface {
@@ -93,10 +194,12 @@ type Conn interface {
 	io.Writer
 }
 
-var Stdio Conn = struct {
+type ReadWriter struct {
 	io.Reader
 	io.Writer
-}{
+}
+
+var Stdio Conn = ReadWriter{
 	os.Stdin,
 	os.Stdout,
 }
