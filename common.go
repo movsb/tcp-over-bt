@@ -39,16 +39,25 @@ var (
 	uuidCtrl    = Must1(bluetooth.ParseUUID(`A004120C-300F-4049-8280-E98AC615ACA1`))
 )
 
-func splitWrite(w io.Writer, p []byte) (int, error) {
-	// Anybody knows the max packet size of bluetooth?
-	// Without a limit, there will be an error.
-	//
-	// GetMTU()?
-	const maxPacketSize = 64
+// Anybody knows the max packet size of bluetooth?
+// Without a limit, there will be an error.
+//
+// GetMTU()?
+const maxPacketSize = 64
 
+type SegmentedWriter struct {
+	n int
+	w io.Writer
+}
+
+func NewSegmentedWriter(w io.Writer, n int) io.Writer {
+	return &SegmentedWriter{w: w, n: n}
+}
+
+func (w *SegmentedWriter) Write(p []byte) (int, error) {
 	count := 0
 	for len(p) > 0 {
-		n, err := w.Write(p[:min(maxPacketSize, len(p))])
+		n, err := w.w.Write(p[:min(w.n, len(p))])
 		count += n
 		if err != nil {
 			return count, err
@@ -79,7 +88,12 @@ func Stream(a, b io.ReadWriter) {
 	wg.Wait()
 }
 
-var Stdio io.ReadWriter = struct {
+type Conn interface {
+	io.Reader
+	io.Writer
+}
+
+var Stdio Conn = struct {
 	io.Reader
 	io.Writer
 }{

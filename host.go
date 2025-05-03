@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -16,22 +17,11 @@ import (
 
 type Host struct {
 	adapter *bluetooth.Adapter
-
-	device bluetooth.Device
-	svc    bluetooth.DeviceService
-	rx, tx bluetooth.DeviceCharacteristic
-	ctrl   bluetooth.DeviceCharacteristic
-
-	mu      sync.Mutex
-	txBuf   *bytes.Buffer
-	txBufCh chan struct{}
 }
 
 func NewHost() *Host {
 	h := &Host{
 		adapter: bluetooth.DefaultAdapter,
-		txBuf:   bytes.NewBuffer(nil),
-		txBufCh: make(chan struct{}),
 	}
 
 	h.adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
@@ -74,41 +64,65 @@ func (h *Host) Scan(timeout time.Duration) (name string, address string, found b
 	return
 }
 
-func (h *Host) Connect(address string) {
+func (h *Host) Connect(address string) Conn {
 	addr := bluetooth.Address{}
 	addr.Set(address)
-	h.device = Must1(h.adapter.Connect(addr, bluetooth.ConnectionParams{}))
-	services := Must1(h.device.DiscoverServices([]bluetooth.UUID{uuidService}))
-	h.svc = services[0]
-	chs := Must1(h.svc.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx, uuidCtrl}))
-	h.tx, h.rx, h.ctrl = chs[0], chs[1], chs[2]
-	Must(h.tx.EnableNotifications(func(buf []byte) {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		h.txBuf.Write(buf)
+
+	device := Must1(h.adapter.Connect(addr, bluetooth.ConnectionParams{}))
+	services := Must1(device.DiscoverServices([]bluetooth.UUID{uuidService}))
+	service := services[0]
+	chs := Must1(service.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx, uuidCtrl}))
+	tx, rx, ctrl := chs[0], chs[1], chs[2]
+
+	conn := &HostConn{
+		w: NewSegmentedWriter(rx, maxPacketSize),
+
+		txBuf:   bytes.NewBuffer(nil),
+		txBufCh: make(chan struct{}),
+	}
+
+	// Notification callback is called in a separate goroutine, so it may be in wrong order.
+	// https://github.com/tinygo-org/bluetooth/blob/b82048cd9da0fdabb6f2508f461c364184087b3a/gap_darwin.go#L223
+	Must(tx.EnableNotifications(func(buf []byte) {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		conn.txBuf.Write(buf)
 		select {
-		case h.txBufCh <- struct{}{}:
+		case conn.txBufCh <- struct{}{}:
 		default:
 		}
 	}))
 
-	h.ctrl.Write([]byte(`Greeting from Host`))
+	Must1(ctrl.Write([]byte(`Greeting from Host`)))
+
+	return conn
 }
 
-func (h *Host) Read(p []byte) (int, error) {
-	h.mu.Lock()
-	if h.txBuf.Len() <= 0 {
-		h.mu.Unlock()
-		<-h.txBufCh
-		h.mu.Lock()
+type HostConn struct {
+	w io.Writer
+
+	mu      sync.RWMutex
+	txBuf   *bytes.Buffer
+	txBufCh chan struct{}
+}
+
+func (c *HostConn) Read(p []byte) (int, error) {
+	c.mu.RLock()
+	if c.txBuf.Len() <= 0 {
+		c.mu.RUnlock()
+		<-c.txBufCh
+		c.mu.RLock()
 	}
-	n, err := h.txBuf.Read(p)
-	h.mu.Unlock()
+	n, err := c.txBuf.Read(p)
+	c.mu.RUnlock()
+	if err == io.EOF {
+		err = nil
+	}
 	return n, err
 }
 
-func (h *Host) Write(p []byte) (int, error) {
-	return splitWrite(h.rx, p)
+func (c *HostConn) Write(p []byte) (int, error) {
+	return c.w.Write(p)
 }
 
 func main() {
@@ -137,8 +151,8 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr, `Connecting to`, address, name)
-	h.Connect(address)
+	conn := h.Connect(address)
 	fmt.Fprintln(os.Stderr, `Connected`)
 
-	Stream(h, Stdio)
+	Stream(conn, Stdio)
 }
