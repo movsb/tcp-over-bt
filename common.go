@@ -117,6 +117,11 @@ func (sp *SequencedPacket) Receive(p []byte) error {
 	if seq < sp.recvSeq {
 		return fmt.Errorf(`invalid packet received: seq too small`)
 	} else if seq > sp.recvSeq {
+		// protocol mismatch if this is the very first packet received.
+		// since seq will loop back, this condition is not enough.
+		if sp.recvSeq == 0 {
+		}
+
 		sp.recvBacklog[seq] = data
 		log.Println(`unordered packet received`, sp.recvSeq, seq)
 		return nil
