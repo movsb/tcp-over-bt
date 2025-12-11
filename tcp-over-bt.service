@@ -1,7 +1,9 @@
 [Unit]
 Description=tcp-over-bt
-Requires=sshd.service
-After=sshd.service
+
+# On Ubuntu, it changed? first it's sshd, it's now ssh.
+#Requires=sshd.service
+#After=sshd.service
 
 [Service]
 ExecStart=/usr/local/bin/tcp-over-bt
