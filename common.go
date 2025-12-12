@@ -123,7 +123,7 @@ func (sp *SequencedPacket) Receive(p []byte) error {
 		}
 
 		sp.recvBacklog[seq] = data
-		log.Println(`unordered packet received`, sp.recvSeq, seq)
+		// log.Println(`unordered packet received`, sp.recvSeq, seq)
 		return nil
 	}
 
