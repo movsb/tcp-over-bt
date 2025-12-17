@@ -72,7 +72,7 @@ func (h *Host) Connect(address string) Conn {
 	chs := Must1(service.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx, uuidCtrl}))
 	tx, rx, ctrl := chs[0], chs[1], chs[2]
 
-	w := NewSegmentedWriter(NewOrderedWriter(rx), maxPacketSize)
+	w := NewSegmentedWriter(NewOrderedWriter(rx), maxPacketSize-SeqLen)
 	r := NewOrderedReader(context.Background())
 
 	Must(tx.EnableNotifications(func(buf []byte) {

@@ -123,7 +123,7 @@ func (d *Device) Accept() Conn {
 		cancel()
 	}()
 
-	w := NewSegmentedWriter(NewOrderedWriter(d.tx), maxPacketSize)
+	w := NewSegmentedWriter(NewOrderedWriter(d.tx), maxPacketSize-SeqLen)
 	r := NewOrderedReader(ctx)
 	d.orderedReader.Store(r)
 

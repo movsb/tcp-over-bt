@@ -69,6 +69,10 @@ func (w *SegmentedWriter) Write(p []byte) (int, error) {
 	return count, nil
 }
 
+// number of bytes used by both ordered reader and writer.
+// for segmented writer, this length must be subtracted.
+const SeqLen = 1
+
 type OrderedWriter struct {
 	sendSeq uint8
 	writer  io.Writer
