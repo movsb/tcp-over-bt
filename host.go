@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
@@ -72,18 +73,46 @@ func (h *Host) Connect(address string) Conn {
 	chs := Must1(service.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx, uuidCtrl}))
 	tx, rx, ctrl := chs[0], chs[1], chs[2]
 
-	w := NewSegmentedWriter(NewOrderedWriter(rx), maxPacketSize-SeqLen)
+	// try to test max packet size
+	fmt.Fprintln(os.Stderr, `Testing MTU...`)
+	mtu := h.testMTU(ctrl)
+	if mtu <= 0 {
+		log.Fatalln(`cannot get mtu size`)
+	}
+	fmt.Fprintln(os.Stderr, `MTU:`, mtu)
+
+	w := NewSegmentedWriter(NewOrderedWriter(rx), mtu-SeqLen)
 	r := NewOrderedReader(context.Background())
 
+	// must be enabled before open new connection, or there
+	// will be packet lose.
 	Must(tx.EnableNotifications(func(buf []byte) {
 		if err := r.Receive(buf); err != nil {
 			log.Fatalln(err)
 		}
 	}))
 
-	Must1(ctrl.Write([]byte(`Greeting from Host`)))
+	// open a new connection with specified mtu.
+	ctrlBuf := [5]byte{}
+	ctrlBuf[0] = byte(NewConn)
+	binary.LittleEndian.PutUint32(ctrlBuf[1:], uint32(mtu))
+	Must1(ctrl.Write(ctrlBuf[:]))
 
 	return &ReadWriter{Writer: w, Reader: r}
+}
+
+func (h *Host) testMTU(ctrl bluetooth.DeviceCharacteristic) int {
+	base := 64
+	c := 1
+	for {
+		b := make([]byte, base*c)
+		b[0] = byte(TestMTU)
+		_, err := ctrl.Write(b)
+		if err != nil {
+			return base * (c - 1)
+		}
+		c++
+	}
 }
 
 func main() {

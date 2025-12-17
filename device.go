@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
 	"log"
 	"net"
@@ -21,8 +22,9 @@ type Device struct {
 	// Hence we do not know when our device is connected or disconnected.
 	// The control characteristic is sent from Host to let us know that
 	// a new connection is being made.
-	ctrl       *bluetooth.Characteristic
-	connection chan struct{}
+	ctrl *bluetooth.Characteristic
+	// mtu.
+	connection chan int
 
 	// To close a connection, close this channel.
 	closed chan struct{}
@@ -37,7 +39,7 @@ func NewDevice() *Device {
 		tx:      &bluetooth.Characteristic{},
 
 		ctrl:       &bluetooth.Characteristic{},
-		connection: make(chan struct{}),
+		connection: make(chan int),
 		closed:     make(chan struct{}),
 	}
 
@@ -83,9 +85,19 @@ func NewDevice() *Device {
 }
 
 func (d *Device) writeControl(client bluetooth.Connection, offset int, p []byte) {
-	close(d.closed)
-
-	d.connection <- struct{}{}
+	cmd := DeviceCommand(p[0])
+	switch cmd {
+	case TestMTU:
+		log.Println(`TestMTU:`, len(p))
+	case NewConn:
+		if len(p) != 5 {
+			log.Println(`invalid NewConn packet length`)
+			return
+		}
+		mtu := binary.LittleEndian.Uint32(p[1:])
+		close(d.closed)
+		d.connection <- int(mtu)
+	}
 }
 
 func (d *Device) onRecv(client bluetooth.Connection, offset int, p []byte) {
@@ -112,7 +124,7 @@ func (d *Device) Listen() {
 }
 
 func (d *Device) Accept() Conn {
-	<-d.connection
+	mtu := <-d.connection
 	d.closed = make(chan struct{})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,7 +135,7 @@ func (d *Device) Accept() Conn {
 		cancel()
 	}()
 
-	w := NewSegmentedWriter(NewOrderedWriter(d.tx), maxPacketSize-SeqLen)
+	w := NewSegmentedWriter(NewOrderedWriter(d.tx), mtu-SeqLen)
 	r := NewOrderedReader(ctx)
 	d.orderedReader.Store(r)
 

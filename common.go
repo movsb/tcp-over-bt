@@ -13,6 +13,13 @@ import (
 	"tinygo.org/x/bluetooth"
 )
 
+type DeviceCommand byte
+
+const (
+	NewConn DeviceCommand = iota + 1
+	TestMTU
+)
+
 func caller() (string, int) {
 	_, file, line, _ := runtime.Caller(2)
 	return file, line
@@ -45,7 +52,7 @@ var (
 // Without a limit, there will be an error.
 //
 // GetMTU()?
-const maxPacketSize = 64
+// const maxPacketSize = 64
 
 type SegmentedWriter struct {
 	n int
