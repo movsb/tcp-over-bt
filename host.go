@@ -72,22 +72,18 @@ func (h *Host) Connect(address string) Conn {
 	chs := Must1(service.DiscoverCharacteristics([]bluetooth.UUID{uuidTx, uuidRx, uuidCtrl}))
 	tx, rx, ctrl := chs[0], chs[1], chs[2]
 
-	seq := NewSequencedPacket(context.Background(), rx)
-
-	conn := &ReadWriter{
-		Writer: NewSegmentedWriter(seq, maxPacketSize),
-		Reader: seq,
-	}
+	w := NewSegmentedWriter(NewOrderedWriter(rx), maxPacketSize)
+	r := NewOrderedReader(context.Background())
 
 	Must(tx.EnableNotifications(func(buf []byte) {
-		if err := seq.Receive(buf); err != nil {
+		if err := r.Receive(buf); err != nil {
 			log.Fatalln(err)
 		}
 	}))
 
 	Must1(ctrl.Write([]byte(`Greeting from Host`)))
 
-	return conn
+	return &ReadWriter{Writer: w, Reader: r}
 }
 
 func main() {

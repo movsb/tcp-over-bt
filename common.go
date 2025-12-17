@@ -69,6 +69,28 @@ func (w *SegmentedWriter) Write(p []byte) (int, error) {
 	return count, nil
 }
 
+type OrderedWriter struct {
+	sendSeq uint8
+	writer  io.Writer
+}
+
+func NewOrderedWriter(w io.Writer) *OrderedWriter {
+	return &OrderedWriter{
+		sendSeq: 0,
+		writer:  w,
+	}
+}
+
+func (sp *OrderedWriter) Write(p []byte) (int, error) {
+	wrapped := append([]byte{sp.sendSeq}, p...)
+	sp.sendSeq++
+	n, err := sp.writer.Write(wrapped)
+	if err != nil {
+		return 0, err
+	}
+	return n - 1, nil
+}
+
 // Notification callback is called in a separate goroutine, so it may be in wrong order.
 // https://github.com/tinygo-org/bluetooth/blob/b82048cd9da0fdabb6f2508f461c364184087b3a/gap_darwin.go#L223
 //
@@ -76,11 +98,8 @@ func (w *SegmentedWriter) Write(p []byte) (int, error) {
 // This is to fix the receive order.
 //
 // And, there's no need to implement an ARQ protocol. No packet lost, only unordered.
-type SequencedPacket struct {
+type OrderedReader struct {
 	ctx context.Context
-
-	sendSeq uint8
-	writer  io.Writer
 
 	recvSeq     uint8
 	recvBacklog map[uint8][]byte
@@ -90,12 +109,9 @@ type SequencedPacket struct {
 }
 
 // When ctx Done, blocking Read is cancelled.
-func NewSequencedPacket(ctx context.Context, w io.Writer) *SequencedPacket {
-	return &SequencedPacket{
+func NewOrderedReader(ctx context.Context) *OrderedReader {
+	return &OrderedReader{
 		ctx: ctx,
-
-		sendSeq: 0,
-		writer:  w,
 
 		recvSeq:     0,
 		recvBacklog: map[uint8][]byte{},
@@ -104,7 +120,7 @@ func NewSequencedPacket(ctx context.Context, w io.Writer) *SequencedPacket {
 	}
 }
 
-func (sp *SequencedPacket) Receive(p []byte) error {
+func (sp *OrderedReader) Receive(p []byte) error {
 	if len(p) < 2 {
 		return fmt.Errorf(`invalid packet received`)
 	}
@@ -148,17 +164,7 @@ func (sp *SequencedPacket) Receive(p []byte) error {
 	return nil
 }
 
-func (sp *SequencedPacket) Write(p []byte) (int, error) {
-	wrapped := append([]byte{sp.sendSeq}, p...)
-	sp.sendSeq++
-	n, err := sp.writer.Write(wrapped)
-	if err != nil {
-		return 0, err
-	}
-	return n - 1, nil
-}
-
-func (sp *SequencedPacket) Read(p []byte) (int, error) {
+func (sp *OrderedReader) Read(p []byte) (int, error) {
 	sp.lock.Lock()
 	if sp.recvBuf.Len() <= 0 {
 		sp.lock.Unlock()

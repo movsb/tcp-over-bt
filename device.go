@@ -27,7 +27,7 @@ type Device struct {
 	// To close a connection, close this channel.
 	closed chan struct{}
 
-	seqRW atomic.Pointer[SequencedPacket]
+	orderedReader atomic.Pointer[OrderedReader]
 }
 
 func NewDevice() *Device {
@@ -89,7 +89,7 @@ func (d *Device) writeControl(client bluetooth.Connection, offset int, p []byte)
 }
 
 func (d *Device) onRecv(client bluetooth.Connection, offset int, p []byte) {
-	if r := d.seqRW.Load(); r != nil {
+	if r := d.orderedReader.Load(); r != nil {
 		if err := r.Receive(p); err != nil {
 			log.Fatalln(err)
 		}
@@ -123,16 +123,11 @@ func (d *Device) Accept() Conn {
 		cancel()
 	}()
 
-	seq := NewSequencedPacket(ctx, d.tx)
-	d.seqRW.Store(seq)
+	w := NewSegmentedWriter(NewOrderedWriter(d.tx), maxPacketSize)
+	r := NewOrderedReader(ctx)
+	d.orderedReader.Store(r)
 
-	conn := &DeviceConn{
-		d: d,
-		r: seq,
-		w: NewSegmentedWriter(seq, maxPacketSize),
-	}
-
-	return conn
+	return &DeviceConn{d: d, r: r, w: w}
 }
 
 type DeviceConn struct {
